@@ -18,4 +18,5 @@ class AskHuman(BaseTool):
     }
 
     async def execute(self, inquire: str) -> str:
+        print("\a")  # Play system bell sound
         return input(f"""Bot: {inquire}\n\nYou: """).strip()

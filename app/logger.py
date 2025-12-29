@@ -5,8 +5,7 @@ from loguru import logger as _logger
 
 from app.config import PROJECT_ROOT
 
-
-_print_level = "INFO"
+_print_level = "WARNING"
 
 
 def define_log_level(print_level="INFO", logfile_level="DEBUG", name: str = None):

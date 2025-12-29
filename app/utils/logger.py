@@ -3,7 +3,6 @@ import os
 
 import structlog
 
-
 ENV_MODE = os.getenv("ENV_MODE", "LOCAL")
 
 renderer = [structlog.processors.JSONRenderer()]
@@ -29,4 +28,4 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
-logger: structlog.stdlib.BoundLogger = structlog.get_logger(level=logging.DEBUG)
+logger: structlog.stdlib.BoundLogger = structlog.get_logger(level=logging.WARNING)

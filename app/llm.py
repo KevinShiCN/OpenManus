@@ -3,7 +3,6 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 
-import anthropic
 import httpx
 import tiktoken
 from openai import (
@@ -663,9 +662,10 @@ class LLM:
 
             # Handle Anthropic API separately
             if self.api_type == "anthropic":
-                system_prompt, anthropic_messages = (
-                    self._convert_messages_for_anthropic(messages)
-                )
+                (
+                    system_prompt,
+                    anthropic_messages,
+                ) = self._convert_messages_for_anthropic(messages)
 
                 anthropic_params = {
                     "model": self.model,
@@ -823,7 +823,9 @@ class LLM:
             multimodal_content = (
                 [{"type": "text", "text": content}]
                 if isinstance(content, str)
-                else content if isinstance(content, list) else []
+                else content
+                if isinstance(content, list)
+                else []
             )
 
             # Add images to content
@@ -1014,9 +1016,10 @@ class LLM:
 
             # Handle Anthropic API separately for tool calls
             if self.api_type == "anthropic":
-                system_prompt, anthropic_messages = (
-                    self._convert_messages_for_anthropic(messages)
-                )
+                (
+                    system_prompt,
+                    anthropic_messages,
+                ) = self._convert_messages_for_anthropic(messages)
                 anthropic_tools = (
                     self._convert_tools_for_anthropic(tools) if tools else []
                 )

@@ -3,6 +3,7 @@ import os
 
 import structlog
 
+
 ENV_MODE = os.getenv("ENV_MODE", "LOCAL")
 
 renderer = [structlog.processors.JSONRenderer()]

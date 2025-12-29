@@ -133,9 +133,24 @@ class BaseAgent(BaseModel, ABC):
 
         results: List[str] = []
         async with self.state_context(AgentState.RUNNING):
-            while (
-                self.current_step < self.max_steps and self.state != AgentState.FINISHED
-            ):
+            while self.state != AgentState.FINISHED:
+                if self.current_step >= self.max_steps:
+                    print("\a")  # Play system bell sound
+                    print(
+                        f"\nReached max steps ({self.max_steps}). Continue for another 50 steps? (y/n)"
+                    )
+                    try:
+                        user_input = input().strip().lower()
+                        if user_input in ["y", "yes", "", "是", "好", "继续"]:
+                            self.max_steps += 50
+                            logger.info(
+                                f"Extending execution to {self.max_steps} steps"
+                            )
+                        else:
+                            break
+                    except EOFError:
+                        break
+
                 self.current_step += 1
                 logger.info(f"Executing step {self.current_step}/{self.max_steps}")
                 step_result = await self.step()
@@ -146,7 +161,10 @@ class BaseAgent(BaseModel, ABC):
 
                 results.append(f"Step {self.current_step}: {step_result}")
 
-            if self.current_step >= self.max_steps:
+            if (
+                self.state != AgentState.FINISHED
+                and self.current_step >= self.max_steps
+            ):
                 self.current_step = 0
                 self.state = AgentState.IDLE
                 results.append(f"Terminated: Reached max steps ({self.max_steps})")

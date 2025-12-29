@@ -1,6 +1,10 @@
+import json
 import math
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 
+import anthropic
+import httpx
 import tiktoken
 from openai import (
     APIError,
@@ -31,6 +35,106 @@ from app.schema import (
 )
 
 
+@dataclass
+class AnthropicContentBlock:
+    """Represents a content block in Anthropic response."""
+
+    type: str
+    text: str = ""
+    id: str = ""
+    name: str = ""
+    input: dict = None
+
+    def __post_init__(self):
+        if self.input is None:
+            self.input = {}
+
+
+@dataclass
+class AnthropicUsage:
+    """Represents usage information in Anthropic response."""
+
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
+class AnthropicResponse:
+    """Represents an Anthropic API response."""
+
+    content: List[AnthropicContentBlock]
+    model: str
+    role: str
+    stop_reason: str
+    usage: AnthropicUsage
+
+
+class CustomAnthropicClient:
+    """Custom Anthropic client that uses x-api-key authentication header."""
+
+    def __init__(self, api_key: str, base_url: str):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.http_client = httpx.AsyncClient(timeout=300.0)
+        self.messages = self  # For compatibility with SDK-like usage
+
+    async def create(self, **kwargs) -> AnthropicResponse:
+        """Create a message using the Anthropic API."""
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+
+        url = f"{self.base_url}/v1/messages"
+
+        response = await self.http_client.post(
+            url,
+            headers=headers,
+            json=kwargs,
+        )
+
+        if response.status_code != 200:
+            error_msg = response.text
+            raise Exception(
+                f"Anthropic API error: {response.status_code} - {error_msg}"
+            )
+
+        data = response.json()
+
+        # Parse content blocks
+        content_blocks = []
+        for block in data.get("content", []):
+            content_blocks.append(
+                AnthropicContentBlock(
+                    type=block.get("type", "text"),
+                    text=block.get("text", ""),
+                    id=block.get("id", ""),
+                    name=block.get("name", ""),
+                    input=block.get("input", {}),
+                )
+            )
+
+        # Parse usage
+        usage_data = data.get("usage", {})
+        usage = AnthropicUsage(
+            input_tokens=usage_data.get("input_tokens", 0),
+            output_tokens=usage_data.get("output_tokens", 0),
+        )
+
+        return AnthropicResponse(
+            content=content_blocks,
+            model=data.get("model", ""),
+            role=data.get("role", "assistant"),
+            stop_reason=data.get("stop_reason", ""),
+            usage=usage,
+        )
+
+    async def close(self):
+        """Close the HTTP client."""
+        await self.http_client.aclose()
+
+
 REASONING_MODELS = ["o1", "o3-mini"]
 MULTIMODAL_MODELS = [
     "gpt-4-vision-preview",
@@ -39,6 +143,8 @@ MULTIMODAL_MODELS = [
     "claude-3-opus-20240229",
     "claude-3-sonnet-20240229",
     "claude-3-haiku-20240307",
+    "claude-opus-4-5",
+    "claude-sonnet-4-20250514",
 ]
 
 
@@ -221,6 +327,12 @@ class LLM:
                 )
             elif self.api_type == "aws":
                 self.client = BedrockClient()
+            elif self.api_type == "anthropic":
+                # Use custom Anthropic client with x-api-key authentication
+                self.client = CustomAnthropicClient(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                )
             else:
                 self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
@@ -351,6 +463,139 @@ class LLM:
 
         return formatted_messages
 
+    def _convert_messages_for_anthropic(
+        self, messages: List[dict]
+    ) -> tuple[str, List[dict]]:
+        """
+        Convert OpenAI-format messages to Anthropic format.
+
+        Returns:
+            tuple: (system_prompt, anthropic_messages)
+        """
+        system_prompt = ""
+        anthropic_messages = []
+
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content", "")
+
+            if role == "system":
+                # Anthropic uses a separate system parameter
+                system_prompt = content if isinstance(content, str) else str(content)
+            elif role == "user":
+                anthropic_messages.append(
+                    {
+                        "role": "user",
+                        "content": content if isinstance(content, str) else content,
+                    }
+                )
+            elif role == "assistant":
+                anthropic_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content if isinstance(content, str) else content,
+                    }
+                )
+            elif role == "tool":
+                # Tool responses in Anthropic format
+                anthropic_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.get("tool_call_id", ""),
+                                "content": (
+                                    content
+                                    if isinstance(content, str)
+                                    else str(content)
+                                ),
+                            }
+                        ],
+                    }
+                )
+
+        return system_prompt, anthropic_messages
+
+    def _convert_tools_for_anthropic(self, tools: List[dict]) -> List[dict]:
+        """Convert OpenAI tool format to Anthropic tool format."""
+        anthropic_tools = []
+        for tool in tools:
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+                anthropic_tools.append(
+                    {
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {}),
+                    }
+                )
+        return anthropic_tools
+
+    def _convert_anthropic_response_to_openai(self, response) -> ChatCompletionMessage:
+        """Convert Anthropic response to OpenAI ChatCompletionMessage format."""
+        content = ""
+        tool_calls = []
+
+        for block in response.content:
+            if block.type == "text":
+                content = block.text
+            elif block.type == "tool_use":
+                tool_calls.append(
+                    {
+                        "id": block.id,
+                        "type": "function",
+                        "function": {
+                            "name": block.name,
+                            "arguments": json.dumps(block.input),
+                        },
+                    }
+                )
+
+        # Create mock classes that match OpenAI's structure
+        class MockFunction:
+            def __init__(self, name, arguments):
+                self.name = name
+                self.arguments = arguments
+
+            def model_dump(self):
+                return {"name": self.name, "arguments": self.arguments}
+
+        class MockToolCall:
+            def __init__(self, id, type, function_dict):
+                self.id = id
+                self.type = type
+                self.function = MockFunction(
+                    function_dict["name"], function_dict["arguments"]
+                )
+
+            def model_dump(self):
+                return {
+                    "id": self.id,
+                    "type": self.type,
+                    "function": self.function.model_dump(),
+                }
+
+        class MockMessage:
+            def __init__(self, content, tool_calls_dicts):
+                self.content = content
+                self.role = "assistant"
+                if tool_calls_dicts:
+                    self.tool_calls = [
+                        MockToolCall(tc["id"], tc["type"], tc["function"])
+                        for tc in tool_calls_dicts
+                    ]
+                else:
+                    self.tool_calls = None
+
+            def model_dump(self):
+                result = {"content": self.content, "role": self.role}
+                if self.tool_calls:
+                    result["tool_calls"] = [tc.model_dump() for tc in self.tool_calls]
+                return result
+
+        return MockMessage(content, tool_calls if tool_calls else None)
+
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
@@ -415,6 +660,47 @@ class LLM:
                 params["temperature"] = (
                     temperature if temperature is not None else self.temperature
                 )
+
+            # Handle Anthropic API separately
+            if self.api_type == "anthropic":
+                system_prompt, anthropic_messages = (
+                    self._convert_messages_for_anthropic(messages)
+                )
+
+                anthropic_params = {
+                    "model": self.model,
+                    "messages": anthropic_messages,
+                    "max_tokens": self.max_tokens,
+                }
+                if system_prompt:
+                    anthropic_params["system"] = system_prompt
+                if temperature is not None:
+                    anthropic_params["temperature"] = temperature
+                elif self.temperature is not None:
+                    anthropic_params["temperature"] = self.temperature
+
+                # Use custom client (streaming not supported yet)
+                response = await self.client.messages.create(**anthropic_params)
+
+                # Extract text from response
+                content = ""
+                for block in response.content:
+                    if hasattr(block, "text") and block.text:
+                        content = block.text
+                        break
+
+                if not content:
+                    raise ValueError("Empty or invalid response from Anthropic")
+
+                self.update_token_count(
+                    response.usage.input_tokens, response.usage.output_tokens
+                )
+
+                # Print response for streaming-like behavior
+                if stream:
+                    print(content)
+
+                return content
 
             if not stream:
                 # Non-streaming request
@@ -537,9 +823,7 @@ class LLM:
             multimodal_content = (
                 [{"type": "text", "text": content}]
                 if isinstance(content, str)
-                else content
-                if isinstance(content, list)
-                else []
+                else content if isinstance(content, list) else []
             )
 
             # Add images to content
@@ -727,6 +1011,56 @@ class LLM:
                 params["temperature"] = (
                     temperature if temperature is not None else self.temperature
                 )
+
+            # Handle Anthropic API separately for tool calls
+            if self.api_type == "anthropic":
+                system_prompt, anthropic_messages = (
+                    self._convert_messages_for_anthropic(messages)
+                )
+                anthropic_tools = (
+                    self._convert_tools_for_anthropic(tools) if tools else []
+                )
+
+                # Convert tool_choice to Anthropic format
+                anthropic_tool_choice = None
+                if tool_choice == ToolChoice.AUTO or tool_choice == "auto":
+                    anthropic_tool_choice = {"type": "auto"}
+                elif tool_choice == ToolChoice.REQUIRED or tool_choice == "required":
+                    anthropic_tool_choice = {"type": "any"}
+                elif tool_choice == ToolChoice.NONE or tool_choice == "none":
+                    anthropic_tool_choice = None
+                    anthropic_tools = []  # Don't send tools if none selected
+                elif isinstance(tool_choice, dict) and "function" in tool_choice:
+                    anthropic_tool_choice = {
+                        "type": "tool",
+                        "name": tool_choice["function"]["name"],
+                    }
+
+                anthropic_params = {
+                    "model": self.model,
+                    "messages": anthropic_messages,
+                    "max_tokens": self.max_tokens,
+                }
+                if system_prompt:
+                    anthropic_params["system"] = system_prompt
+                if anthropic_tools:
+                    anthropic_params["tools"] = anthropic_tools
+                if anthropic_tool_choice and anthropic_tools:
+                    anthropic_params["tool_choice"] = anthropic_tool_choice
+                if temperature is not None:
+                    anthropic_params["temperature"] = temperature
+                elif self.temperature is not None:
+                    anthropic_params["temperature"] = self.temperature
+
+                response = await self.client.messages.create(**anthropic_params)
+
+                # Update token counts
+                self.update_token_count(
+                    response.usage.input_tokens, response.usage.output_tokens
+                )
+
+                # Convert Anthropic response to OpenAI format
+                return self._convert_anthropic_response_to_openai(response)
 
             params["stream"] = False  # Always use non-streaming for tool requests
             response: ChatCompletion = await self.client.chat.completions.create(

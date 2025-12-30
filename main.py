@@ -3,6 +3,7 @@ import asyncio
 
 from app.agent.manus import Manus
 from app.logger import logger
+from app.request_history import log_request, update_request_status
 
 
 async def main():
@@ -15,6 +16,7 @@ async def main():
 
     # Create and initialize Manus agent
     agent = await Manus.create()
+    request_id = None
     try:
         # Use command line prompt if provided, otherwise ask for input
         try:
@@ -34,11 +36,22 @@ async def main():
             logger.warning("Empty prompt provided.")
             return
 
+        # Log request to both logger and history file
+        request_id = log_request(prompt, status="started")
+
         logger.warning("Processing your request...")
         await agent.run(prompt)
+
+        update_request_status(request_id, "completed")
         logger.info("Request processing completed.")
     except KeyboardInterrupt:
+        if request_id:
+            update_request_status(request_id, "interrupted")
         logger.warning("Operation interrupted.")
+    except Exception as e:
+        if request_id:
+            update_request_status(request_id, "failed", str(e))
+        raise
     finally:
         # Ensure agent resources are cleaned up before exiting
         await agent.cleanup()

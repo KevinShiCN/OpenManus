@@ -16,9 +16,8 @@ async def main():
     )
     args = parser.parse_args()
 
-    # Create and initialize Manus agent
-    agent = await Manus.create()
     request_id = None
+    agent = None
     try:
         # Use command line prompt if provided, otherwise ask for input
         try:
@@ -38,10 +37,14 @@ async def main():
             logger.warning("Empty prompt provided.")
             return
 
-        # Initialize session workspace with timestamped directory
+        # Initialize session workspace BEFORE creating agent
+        # This ensures agent's system_prompt gets the correct session directory
         session_workspace.set_base_workspace(config.workspace_root)
         session_path = session_workspace.create_session(prompt)
         logger.info(f"Session workspace created: {session_path}")
+
+        # Create and initialize Manus agent AFTER session is created
+        agent = await Manus.create()
 
         # Log request to both logger and history file
         request_id = log_request(prompt, status="started")
@@ -61,7 +64,8 @@ async def main():
         raise
     finally:
         # Ensure agent resources are cleaned up before exiting
-        await agent.cleanup()
+        if agent:
+            await agent.cleanup()
 
 
 if __name__ == "__main__":

@@ -78,10 +78,23 @@ class LocalFileOperator(FileOperator):
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=timeout
             )
+            # Use system default encoding on Windows (typically 'gbk' or 'cp936')
+            # Fall back to utf-8 with error handling
+            import sys
+
+            encoding = "gbk" if sys.platform == "win32" else "utf-8"
+            try:
+                stdout_str = stdout.decode(encoding)
+            except UnicodeDecodeError:
+                stdout_str = stdout.decode("utf-8", errors="replace")
+            try:
+                stderr_str = stderr.decode(encoding)
+            except UnicodeDecodeError:
+                stderr_str = stderr.decode("utf-8", errors="replace")
             return (
                 process.returncode or 0,
-                stdout.decode(),
-                stderr.decode(),
+                stdout_str,
+                stderr_str,
             )
         except asyncio.TimeoutError as exc:
             try:

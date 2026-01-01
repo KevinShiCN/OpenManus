@@ -200,3 +200,13 @@ cython_debug/
 
 # node
 node_modules
+
+### WebDAV ###
+._DAV/
+
+### AI Tools ###
+.claude/
+.spec-workflow/
+
+### Windows Virtual Environment ###
+.venv_win/

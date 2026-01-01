@@ -217,19 +217,39 @@ class StrReplaceEditor(BaseTool):
 
     @staticmethod
     async def _view_directory(path: PathLike, operator: FileOperator) -> CLIResult:
-        """Display directory contents."""
-        find_cmd = f"find {path} -maxdepth 2 -not -path '*/\\.*'"
+        """Display directory contents using cross-platform Python approach."""
+        import os
 
-        # Execute command using the operator
-        returncode, stdout, stderr = await operator.run_command(find_cmd)
+        try:
+            path_obj = Path(path)
+            items = []
 
-        if not stderr:
+            for root, dirs, files in os.walk(path_obj):
+                rel_root = Path(root).relative_to(path_obj)
+                depth = len(rel_root.parts)
+
+                if depth > 2:
+                    dirs.clear()
+                    continue
+
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                for d in dirs:
+                    items.append(str(Path(root) / d))
+                for f in files:
+                    if not f.startswith('.'):
+                        items.append(str(Path(root) / f))
+
+            items.sort()
+            stdout = "\n".join(items)
             stdout = (
                 f"Here's the files and directories up to 2 levels deep in {path}, "
                 f"excluding hidden items:\n{stdout}\n"
             )
+            return CLIResult(output=stdout, error="")
 
-        return CLIResult(output=stdout, error=stderr)
+        except Exception as e:
+            return CLIResult(output="", error=f"Error listing directory: {str(e)}")
 
     async def _view_file(
         self,

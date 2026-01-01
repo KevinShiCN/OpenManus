@@ -1,62 +1,13 @@
 import atexit
-import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
-from io import StringIO
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import ClassVar, Dict, Optional
 
 from loguru import logger
 
 from app.tool.base import BaseTool
-
-
-# ============================================================
-# 模块级别的工作函数（必须在模块顶层定义才能被 pickle）
-# ============================================================
-
-def _worker_execute_code(code: str, submit_time: float) -> Dict:
-    """
-    在工作进程中执行代码。
-    这个函数在进程池的工作进程中运行，进程会被复用。
-    """
-    worker_start = time.perf_counter()
-
-    # 首次调用时记录（进程复用时这个时间会很短）
-    init_time_ms = (worker_start - submit_time) * 1000
-    is_warm = init_time_ms < 100  # 小于100ms认为是热启动
-
-    logger.info(
-        f"⏱️ [python_execute] Worker received task, "
-        f"dispatch latency: {init_time_ms:.1f}ms ({'warm' if is_warm else 'cold'} start)"
-    )
-
-    original_stdout = sys.stdout
-    try:
-        output_buffer = StringIO()
-        sys.stdout = output_buffer
-
-        # 构建安全的全局命名空间
-        if isinstance(__builtins__, dict):
-            safe_globals = {"__builtins__": __builtins__}
-        else:
-            safe_globals = {"__builtins__": __builtins__.__dict__.copy()}
-
-        exec_start = time.perf_counter()
-        exec(code, safe_globals, safe_globals)
-        exec_end = time.perf_counter()
-
-        output = output_buffer.getvalue()
-
-        logger.info(
-            f"⏱️ [python_execute] Code execution took {(exec_end - exec_start)*1000:.1f}ms"
-        )
-
-        return {"observation": output, "success": True}
-
-    except Exception as e:
-        return {"observation": str(e), "success": False}
-    finally:
-        sys.stdout = original_stdout
+from app.workers.python_worker import execute_code as _worker_execute_code
 
 
 class PythonExecute(BaseTool):
@@ -161,9 +112,7 @@ class PythonExecute(BaseTool):
 
         except FuturesTimeoutError:
             total_time = time.perf_counter() - total_start
-            logger.warning(
-                f"⏱️ [python_execute] TIMEOUT after {total_time*1000:.1f}ms"
-            )
+            logger.warning(f"⏱️ [python_execute] TIMEOUT after {total_time*1000:.1f}ms")
             return {
                 "observation": f"Execution timeout after {timeout} seconds",
                 "success": False,

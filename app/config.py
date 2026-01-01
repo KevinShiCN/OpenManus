@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import tomllib
 from pathlib import Path
@@ -8,8 +9,18 @@ from pydantic import BaseModel, Field
 
 
 def get_project_root() -> Path:
-    """Get the project root directory"""
-    return Path(__file__).resolve().parent.parent
+    """Get the project root directory.
+
+    On Windows, avoid resolving mapped drives to UNC paths.
+    """
+    import sys
+
+    path = Path(__file__).parent.parent
+
+    if sys.platform == "win32":
+        return Path(os.path.abspath(path))
+    else:
+        return path.resolve()
 
 
 PROJECT_ROOT = get_project_root()
@@ -366,6 +377,12 @@ class Config:
     def workspace_root(self) -> Path:
         """Get the workspace root directory"""
         return WORKSPACE_ROOT
+
+    @property
+    def session_workspace(self) -> Path:
+        """Get the current session workspace directory (with timestamp)."""
+        from app.session_workspace import session_workspace
+        return session_workspace.get_working_directory()
 
     @property
     def root_path(self) -> Path:

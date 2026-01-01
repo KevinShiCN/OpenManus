@@ -7,6 +7,7 @@ from app.agent.toolcall import ToolCallAgent
 from app.config import config
 from app.logger import logger
 from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
+from app.session_workspace import session_workspace
 from app.tool import Terminate, ToolCollection
 from app.tool.ask_human import AskHuman
 from app.tool.browser_use_tool import BrowserUseTool
@@ -21,7 +22,7 @@ class Manus(ToolCallAgent):
     name: str = "Manus"
     description: str = "A versatile agent that can solve various tasks using multiple tools including MCP-based tools"
 
-    system_prompt: str = SYSTEM_PROMPT.format(directory=config.workspace_root)
+    system_prompt: str = ""  # Will be set dynamically in initialize_helper
     next_step_prompt: str = NEXT_STEP_PROMPT
 
     max_observe: int = 10000
@@ -54,6 +55,17 @@ class Manus(ToolCallAgent):
     def initialize_helper(self) -> "Manus":
         """Initialize basic components synchronously."""
         self.browser_context_helper = BrowserContextHelper(self)
+
+        # Dynamically set system_prompt with session workspace path
+        try:
+            session_path = session_workspace.current_path or config.workspace_root
+        except RuntimeError:
+            session_path = config.workspace_root
+
+        self.system_prompt = SYSTEM_PROMPT.format(
+            workspace_root=config.workspace_root,
+            session_directory=session_path
+        )
         return self
 
     @classmethod

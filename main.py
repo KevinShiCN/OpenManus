@@ -2,8 +2,10 @@ import argparse
 import asyncio
 
 from app.agent.manus import Manus
+from app.config import config
 from app.logger import logger
 from app.request_history import log_request, update_request_status
+from app.session_workspace import session_workspace
 
 
 async def main():
@@ -35,6 +37,11 @@ async def main():
         if not prompt.strip():
             logger.warning("Empty prompt provided.")
             return
+
+        # Initialize session workspace with timestamped directory
+        session_workspace.set_base_workspace(config.workspace_root)
+        session_path = session_workspace.create_session(prompt)
+        logger.info(f"Session workspace created: {session_path}")
 
         # Log request to both logger and history file
         request_id = log_request(prompt, status="started")

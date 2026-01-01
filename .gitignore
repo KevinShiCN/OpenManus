@@ -206,6 +206,7 @@ node_modules
 
 ### AI Tools ###
 .claude/
+.serena/
 .spec-workflow/
 
 ### Windows Virtual Environment ###

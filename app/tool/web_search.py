@@ -246,7 +246,14 @@ class WebSearch(BaseTool):
                 else "us"
             )
 
-        search_params = {"lang": lang, "country": country}
+        # Get proxy from config
+        proxy = (
+            getattr(config.search_config, "proxy", None)
+            if config.search_config
+            else None
+        )
+
+        search_params = {"lang": lang, "country": country, "proxy": proxy}
 
         # Try searching with retries when all engines fail
         for retry_count in range(max_retries + 1):
@@ -401,6 +408,7 @@ class WebSearch(BaseTool):
                 engine.perform_search(
                     query,
                     num_results=num_results,
+                    proxy=search_params.get("proxy"),
                     lang=search_params.get("lang"),
                     country=search_params.get("country"),
                 )

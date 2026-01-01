@@ -7,14 +7,14 @@ from app.tool.search.base import SearchItem, WebSearchEngine
 
 class GoogleSearchEngine(WebSearchEngine):
     def perform_search(
-        self, query: str, num_results: int = 10, *args, **kwargs
+        self, query: str, num_results: int = 10, proxy: str = None, *args, **kwargs
     ) -> List[SearchItem]:
         """
         Google search engine.
 
         Returns results formatted according to SearchItem model.
         """
-        raw_results = search(query, num_results=num_results, advanced=True)
+        raw_results = search(query, num_results=num_results, advanced=True, proxy=proxy)
 
         results = []
         for i, item in enumerate(raw_results):

@@ -23,7 +23,7 @@ class WebSearchEngine(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     def perform_search(
-        self, query: str, num_results: int = 10, *args, **kwargs
+        self, query: str, num_results: int = 10, proxy: str = None, *args, **kwargs
     ) -> List[SearchItem]:
         """
         Perform a web search and return a list of search items.
@@ -31,6 +31,7 @@ class WebSearchEngine(BaseModel):
         Args:
             query (str): The search query to submit to the search engine.
             num_results (int, optional): The number of search results to return. Default is 10.
+            proxy (str, optional): HTTP proxy URL (e.g., http://host:port). Default is None.
             args: Additional arguments.
             kwargs: Additional keyword arguments.
 

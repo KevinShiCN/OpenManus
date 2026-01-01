@@ -7,14 +7,14 @@ from app.tool.search.base import SearchItem, WebSearchEngine
 
 class DuckDuckGoSearchEngine(WebSearchEngine):
     def perform_search(
-        self, query: str, num_results: int = 10, *args, **kwargs
+        self, query: str, num_results: int = 10, proxy: str = None, *args, **kwargs
     ) -> List[SearchItem]:
         """
         DuckDuckGo search engine.
 
         Returns results formatted according to SearchItem model.
         """
-        raw_results = DDGS().text(query, max_results=num_results)
+        raw_results = DDGS(proxy=proxy).text(query, max_results=num_results)
 
         results = []
         for i, item in enumerate(raw_results):

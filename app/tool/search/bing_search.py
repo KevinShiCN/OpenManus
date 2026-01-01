@@ -44,19 +44,26 @@ class BingSearchEngine(WebSearchEngine):
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
 
-    def _search_sync(self, query: str, num_results: int = 10) -> List[SearchItem]:
+    def _search_sync(
+        self, query: str, num_results: int = 10, proxy: str = None
+    ) -> List[SearchItem]:
         """
         Synchronous Bing search implementation to retrieve search results.
 
         Args:
             query (str): The search query to submit to Bing.
             num_results (int, optional): Maximum number of results to return. Defaults to 10.
+            proxy (str, optional): HTTP proxy URL. Defaults to None.
 
         Returns:
             List[SearchItem]: A list of search items with title, URL, and description.
         """
         if not query:
             return []
+
+        # Set proxy if provided
+        if proxy:
+            self.session.proxies = {"http": proxy, "https": proxy}
 
         list_result = []
         first = 1
@@ -134,11 +141,11 @@ class BingSearchEngine(WebSearchEngine):
             return [], None
 
     def perform_search(
-        self, query: str, num_results: int = 10, *args, **kwargs
+        self, query: str, num_results: int = 10, proxy: str = None, *args, **kwargs
     ) -> List[SearchItem]:
         """
         Bing search engine.
 
         Returns results formatted according to SearchItem model.
         """
-        return self._search_sync(query, num_results=num_results)
+        return self._search_sync(query, num_results=num_results, proxy=proxy)

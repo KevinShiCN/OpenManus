@@ -58,6 +58,10 @@ class SearchSettings(BaseModel):
         default="us",
         description="Country code for search results (e.g., us, cn, uk)",
     )
+    proxy: Optional[str] = Field(
+        default=None,
+        description="HTTP proxy for search engines (e.g., http://host:port)",
+    )
 
 
 class RunflowSettings(BaseModel):

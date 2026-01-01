@@ -7,10 +7,13 @@ from app.tool.search.base import SearchItem, WebSearchEngine
 
 class BaiduSearchEngine(WebSearchEngine):
     def perform_search(
-        self, query: str, num_results: int = 10, *args, **kwargs
+        self, query: str, num_results: int = 10, proxy: str = None, *args, **kwargs
     ) -> List[SearchItem]:
         """
         Baidu search engine.
+
+        Note: baidusearch library does not support proxy parameter.
+        Baidu is accessible in China without proxy.
 
         Returns results formatted according to SearchItem model.
         """

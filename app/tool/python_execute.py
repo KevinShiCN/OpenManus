@@ -1,16 +1,75 @@
-import multiprocessing
+import atexit
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
 from io import StringIO
-from typing import Dict
+from typing import ClassVar, Dict, Optional
+
+from loguru import logger
 
 from app.tool.base import BaseTool
 
 
+# ============================================================
+# 模块级别的工作函数（必须在模块顶层定义才能被 pickle）
+# ============================================================
+
+def _worker_execute_code(code: str, submit_time: float) -> Dict:
+    """
+    在工作进程中执行代码。
+    这个函数在进程池的工作进程中运行，进程会被复用。
+    """
+    worker_start = time.perf_counter()
+
+    # 首次调用时记录（进程复用时这个时间会很短）
+    init_time_ms = (worker_start - submit_time) * 1000
+    is_warm = init_time_ms < 100  # 小于100ms认为是热启动
+
+    logger.info(
+        f"⏱️ [python_execute] Worker received task, "
+        f"dispatch latency: {init_time_ms:.1f}ms ({'warm' if is_warm else 'cold'} start)"
+    )
+
+    original_stdout = sys.stdout
+    try:
+        output_buffer = StringIO()
+        sys.stdout = output_buffer
+
+        # 构建安全的全局命名空间
+        if isinstance(__builtins__, dict):
+            safe_globals = {"__builtins__": __builtins__}
+        else:
+            safe_globals = {"__builtins__": __builtins__.__dict__.copy()}
+
+        exec_start = time.perf_counter()
+        exec(code, safe_globals, safe_globals)
+        exec_end = time.perf_counter()
+
+        output = output_buffer.getvalue()
+
+        logger.info(
+            f"⏱️ [python_execute] Code execution took {(exec_end - exec_start)*1000:.1f}ms"
+        )
+
+        return {"observation": output, "success": True}
+
+    except Exception as e:
+        return {"observation": str(e), "success": False}
+    finally:
+        sys.stdout = original_stdout
+
+
 class PythonExecute(BaseTool):
-    """A tool for executing Python code with timeout and safety restrictions."""
+    """
+    A tool for executing Python code with timeout and safety restrictions.
+    Uses a process pool to avoid repeated module initialization overhead.
+    """
 
     name: str = "python_execute"
-    description: str = "Executes Python code string. Note: Only print outputs are visible, function return values are not captured. Use print statements to see results."
+    description: str = (
+        "Executes Python code string. Note: Only print outputs are visible, "
+        "function return values are not captured. Use print statements to see results."
+    )
     parameters: dict = {
         "type": "object",
         "properties": {
@@ -22,19 +81,42 @@ class PythonExecute(BaseTool):
         "required": ["code"],
     }
 
-    def _run_code(self, code: str, result_dict: dict, safe_globals: dict) -> None:
-        original_stdout = sys.stdout
-        try:
-            output_buffer = StringIO()
-            sys.stdout = output_buffer
-            exec(code, safe_globals, safe_globals)
-            result_dict["observation"] = output_buffer.getvalue()
-            result_dict["success"] = True
-        except Exception as e:
-            result_dict["observation"] = str(e)
-            result_dict["success"] = False
-        finally:
-            sys.stdout = original_stdout
+    # 类级别的进程池（所有实例共享）
+    _executor: ClassVar[Optional[ProcessPoolExecutor]] = None
+    _pool_size: ClassVar[int] = 2  # 默认池大小
+    _initialized: ClassVar[bool] = False
+
+    @classmethod
+    def _get_executor(cls) -> ProcessPoolExecutor:
+        """获取或创建进程池（懒加载 + 单例模式）"""
+        if cls._executor is None:
+            logger.info(
+                f"⏱️ [python_execute] Creating process pool with {cls._pool_size} workers..."
+            )
+            pool_start = time.perf_counter()
+
+            cls._executor = ProcessPoolExecutor(max_workers=cls._pool_size)
+
+            # 注册退出时清理
+            atexit.register(cls._shutdown_executor)
+
+            pool_ready = time.perf_counter()
+            logger.info(
+                f"⏱️ [python_execute] Process pool created in "
+                f"{(pool_ready - pool_start)*1000:.1f}ms"
+            )
+            cls._initialized = True
+
+        return cls._executor
+
+    @classmethod
+    def _shutdown_executor(cls) -> None:
+        """关闭进程池"""
+        if cls._executor is not None:
+            logger.info("⏱️ [python_execute] Shutting down process pool...")
+            cls._executor.shutdown(wait=False)
+            cls._executor = None
+            cls._initialized = False
 
     async def execute(
         self,
@@ -43,33 +125,52 @@ class PythonExecute(BaseTool):
     ) -> Dict:
         """
         Executes the provided Python code with a timeout.
+        Uses a process pool to avoid repeated module initialization.
 
         Args:
             code (str): The Python code to execute.
             timeout (int): Execution timeout in seconds.
 
         Returns:
-            Dict: Contains 'output' with execution output or error message and 'success' status.
+            Dict: Contains 'observation' with execution output and 'success' status.
         """
+        total_start = time.perf_counter()
+        logger.info("⏱️ [python_execute] Starting execution (pool mode)...")
 
-        with multiprocessing.Manager() as manager:
-            result = manager.dict({"observation": "", "success": False})
-            if isinstance(__builtins__, dict):
-                safe_globals = {"__builtins__": __builtins__}
-            else:
-                safe_globals = {"__builtins__": __builtins__.__dict__.copy()}
-            proc = multiprocessing.Process(
-                target=self._run_code, args=(code, result, safe_globals)
+        try:
+            # 获取进程池
+            executor = self._get_executor()
+
+            # 提交任务到进程池
+            submit_time = time.perf_counter()
+            future = executor.submit(_worker_execute_code, code, submit_time)
+
+            logger.info(
+                f"⏱️ [python_execute] Task submitted in "
+                f"{(time.perf_counter() - submit_time)*1000:.1f}ms"
             )
-            proc.start()
-            proc.join(timeout)
 
-            # timeout process
-            if proc.is_alive():
-                proc.terminate()
-                proc.join(1)
-                return {
-                    "observation": f"Execution timeout after {timeout} seconds",
-                    "success": False,
-                }
-            return dict(result)
+            # 等待结果（带超时）
+            result = future.result(timeout=timeout)
+
+            total_time = time.perf_counter() - total_start
+            logger.info(
+                f"⏱️ [python_execute] Total execution time: {total_time*1000:.1f}ms"
+            )
+            return result
+
+        except FuturesTimeoutError:
+            total_time = time.perf_counter() - total_start
+            logger.warning(
+                f"⏱️ [python_execute] TIMEOUT after {total_time*1000:.1f}ms"
+            )
+            return {
+                "observation": f"Execution timeout after {timeout} seconds",
+                "success": False,
+            }
+        except Exception as e:
+            logger.error(f"⏱️ [python_execute] Error: {e}")
+            return {
+                "observation": f"Execution error: {str(e)}",
+                "success": False,
+            }

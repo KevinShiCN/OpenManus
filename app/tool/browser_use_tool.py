@@ -1,13 +1,16 @@
 import asyncio
 import base64
 import json
-from typing import Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
 
-from browser_use import Browser as BrowserUseBrowser
-from browser_use import BrowserConfig
-from browser_use.browser.context import BrowserContext, BrowserContextConfig
-from browser_use.dom.service import DomService
 from pydantic import Field, field_validator
+
+# 延迟导入 browser_use 以加速启动（节省 1-2 分钟）
+if TYPE_CHECKING:
+    from browser_use import Browser as BrowserUseBrowser
+    from browser_use import BrowserConfig
+    from browser_use.browser.context import BrowserContext, BrowserContextConfig
+    from browser_use.dom.service import DomService
 from pydantic_core.core_schema import ValidationInfo
 
 from app.config import config
@@ -122,10 +125,13 @@ class BrowserUseTool(BaseTool, Generic[Context]):
     }
 
     lock: asyncio.Lock = Field(default_factory=asyncio.Lock)
-    browser: Optional[BrowserUseBrowser] = Field(default=None, exclude=True)
-    context: Optional[BrowserContext] = Field(default=None, exclude=True)
-    dom_service: Optional[DomService] = Field(default=None, exclude=True)
+    browser: Optional[Any] = Field(default=None, exclude=True)  # BrowserUseBrowser (延迟导入)
+    context: Optional[Any] = Field(default=None, exclude=True)  # BrowserContext (延迟导入)
+    dom_service: Optional[Any] = Field(default=None, exclude=True)  # DomService (延迟导入)
     web_search_tool: WebSearch = Field(default_factory=WebSearch, exclude=True)
+
+    # 延迟导入的模块缓存
+    _browser_use_modules: Optional[dict] = None
 
     # Context for generic functionality
     tool_context: Optional[Context] = Field(default=None, exclude=True)
@@ -138,8 +144,43 @@ class BrowserUseTool(BaseTool, Generic[Context]):
             raise ValueError("Parameters cannot be empty")
         return v
 
-    async def _ensure_browser_initialized(self) -> BrowserContext:
+    @classmethod
+    def _get_browser_use_modules(cls) -> dict:
+        """延迟导入 browser_use 模块（首次调用时导入，后续使用缓存）"""
+        if cls._browser_use_modules is None:
+            from loguru import logger
+            import time
+
+            logger.info("⏱️ [browser_use] 开始加载 browser_use 模块...")
+            start = time.perf_counter()
+
+            from browser_use import Browser as BrowserUseBrowser
+            from browser_use import BrowserConfig
+            from browser_use.browser.context import BrowserContext, BrowserContextConfig
+            from browser_use.dom.service import DomService
+
+            cls._browser_use_modules = {
+                "Browser": BrowserUseBrowser,
+                "BrowserConfig": BrowserConfig,
+                "BrowserContext": BrowserContext,
+                "BrowserContextConfig": BrowserContextConfig,
+                "DomService": DomService,
+            }
+
+            elapsed = (time.perf_counter() - start) * 1000
+            logger.info(f"⏱️ [browser_use] 模块加载完成，耗时 {elapsed:.1f}ms")
+
+        return cls._browser_use_modules
+
+    async def _ensure_browser_initialized(self) -> Any:
         """Ensure browser and context are initialized."""
+        # 延迟导入 browser_use 模块
+        modules = self._get_browser_use_modules()
+        BrowserClass = modules["Browser"]
+        BrowserConfigClass = modules["BrowserConfig"]
+        BrowserContextConfigClass = modules["BrowserContextConfig"]
+        DomServiceClass = modules["DomService"]
+
         if self.browser is None:
             browser_config_kwargs = {"headless": True, "disable_security": True}
 
@@ -169,10 +210,10 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                         if not isinstance(value, list) or value:
                             browser_config_kwargs[attr] = value
 
-            self.browser = BrowserUseBrowser(BrowserConfig(**browser_config_kwargs))
+            self.browser = BrowserClass(BrowserConfigClass(**browser_config_kwargs))
 
         if self.context is None:
-            context_config = BrowserContextConfig()
+            context_config = BrowserContextConfigClass()
 
             # if there is context config in the config, use it.
             if (
@@ -183,7 +224,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                 context_config = config.browser_config.new_context_config
 
             self.context = await self.browser.new_context(context_config)
-            self.dom_service = DomService(await self.context.get_current_page())
+            self.dom_service = DomServiceClass(await self.context.get_current_page())
 
         return self.context
 
@@ -477,7 +518,7 @@ Page content:
                 return ToolResult(error=f"Browser action '{action}' failed: {str(e)}")
 
     async def get_current_state(
-        self, context: Optional[BrowserContext] = None
+        self, context: Optional[Any] = None
     ) -> ToolResult:
         """
         Get the current browser state as a ToolResult.
